@@ -1,6 +1,6 @@
 package bridges.core
 
-import bridges.core.syntax._
+import bridges.syntax.typeName
 import eu.timepit.refined.api._
 import scala.language.higherKinds
 import shapeless._
@@ -10,12 +10,12 @@ trait Encoder[A] {
   def encode: Type
 }
 
-trait ProdEncoder[A] extends Encoder[A] {
-  override def encode: Type.Prod
+trait StructEncoder[A] extends Encoder[A] {
+  override def encode: Type.Struct
 }
 
-trait SumEncoder[A] extends Encoder[A] {
-  override def encode: Type.Sum
+trait UnionEncoder[A] extends Encoder[A] {
+  override def encode: Type.Union
 }
 
 trait BasicEncoder[A] extends Encoder[A]
@@ -29,27 +29,34 @@ trait EncoderInstances2 extends EncoderInstances1 {
     pure(Str)
 
   implicit val charEncoder: BasicEncoder[Char] =
-    pure(Chr)
+    pure(Character)
 
   implicit val intEncoder: BasicEncoder[Int] =
-    pure(Intr)
+    pure(Num)
 
   implicit val doubleEncoder: BasicEncoder[Double] =
-    pure(Real)
+    pure(Floating)
 
   implicit val floatEncoder: BasicEncoder[Float] =
-    pure(Real)
+    pure(Floating)
 
   implicit val booleanEncoder: BasicEncoder[Boolean] =
     pure(Bool)
 
-  implicit def optionEncoder[A](implicit enc: BasicEncoder[A]): BasicEncoder[Option[A]] =
-    pure(Opt(enc.encode))
+  implicit def optionEncoder[A](
+      implicit enc: BasicEncoder[A]
+  ): BasicEncoder[Option[A]] =
+    pure(Optional(enc.encode))
 
-  implicit def traversableEncoder[F[_] <: Traversable[_], A](implicit enc: BasicEncoder[A]): BasicEncoder[F[A]] =
-    pure(Arr(enc.encode))
+  implicit def traversableEncoder[F[_] <: Traversable[_], A](
+      implicit enc: BasicEncoder[A]
+  ): BasicEncoder[F[A]] =
+    pure(Array(enc.encode))
 
-  implicit def valueClassEncoder[A <: AnyVal, B](implicit unwrapped: Unwrapped.Aux[A, B], encoder: BasicEncoder[B]): BasicEncoder[A] =
+  implicit def valueClassEncoder[A <: AnyVal, B](
+      implicit unwrapped: Unwrapped.Aux[A, B],
+      encoder: BasicEncoder[B]
+  ): BasicEncoder[A] =
     pure(encoder.encode)
 
   implicit def refinedEncoder[A, B](implicit enc: BasicEncoder[A]): BasicEncoder[Refined[A, B]] =
@@ -60,57 +67,58 @@ trait EncoderInstances2 extends EncoderInstances1 {
 trait EncoderInstances1 extends EncoderInstances0 {
   import Type._
 
-  implicit val hnilProdEncoder: ProdEncoder[HNil] =
-    pureProd(Prod(Nil))
+  implicit val hnilEncoder: StructEncoder[HNil] =
+    pureStruct(Struct(Nil))
 
-  implicit def hconsProdEncoder[K <: Symbol, H, T <: HList](
+  implicit def hconsEncoder[K <: Symbol, H, T <: HList](
       implicit
       witness: Witness.Aux[K],
       hEnc: Lazy[BasicEncoder[H]],
-      tEnc: ProdEncoder[T]
-  ): ProdEncoder[FieldType[K, H] :: T] = {
+      tEnc: StructEncoder[T]
+  ): StructEncoder[FieldType[K, H] :: T] = {
     val name = witness.value.name
     val head = hEnc.value.encode
     val tail = tEnc.encode
-    pureProd(Prod((name := head) +: tail.fields))
+    pureStruct((name, head) +: tail)
   }
 
-  implicit def cnilSumEncoder: SumEncoder[CNil] =
-    pureSum(Sum(Nil))
+  implicit def cnilUnionEncoder: UnionEncoder[CNil] =
+    pureUnion(Union(Nil))
 
-  implicit def cconsSumEncoder[K <: Symbol, H, T <: Coproduct](
+  // we should always have a StructEncoder for H as on a Coproduct
+  implicit def cconsUnionEncoder[K <: Symbol, H, T <: Coproduct](
       implicit
       witness: Witness.Aux[K],
-      hEnc: Lazy[ProdEncoder[H]],
-      tEnc: SumEncoder[T]
-  ): SumEncoder[FieldType[K, H] :+: T] = {
-    val name    = witness.value.name
-    val product = hEnc.value.encode
-    val tail    = tEnc.encode
-    pureSum(Sum((name := product) +: tail.products))
+      hEnc: Lazy[BasicEncoder[H]],
+      hEncFields: Lazy[StructEncoder[H]],
+      tEnc: UnionEncoder[T]
+  ): UnionEncoder[FieldType[K, H] :+: T] = {
+    val name       = witness.value.name
+    val head       = hEnc.value.encode
+    val headFields = hEncFields.value.encode
+    val tail       = tEnc.encode
+
+    pureUnion(disc(name, head, headFields) +: tail)
   }
 
-  implicit def genericProdEncoder[A, R](
-      implicit
-      gen: LabelledGeneric.Aux[A, R],
-      enc: Lazy[ProdEncoder[R]]
-  ): ProdEncoder[A] =
-    pureProd(enc.value.encode)
+  implicit def genericStructEncoder[A, L](
+      implicit gen: LabelledGeneric.Aux[A, L],
+      enc: Lazy[StructEncoder[L]]
+  ): StructEncoder[A] =
+    pureStruct(enc.value.encode)
 
-  implicit def genericSumEncoder[A, R](
-      implicit
-      gen: LabelledGeneric.Aux[A, R],
-      enc: Lazy[SumEncoder[R]]
-  ): SumEncoder[A] =
-    pureSum(enc.value.encode)
+  implicit def genericUnionEncoder[A, L](
+      implicit gen: LabelledGeneric.Aux[A, L],
+      enc: Lazy[UnionEncoder[L]]
+  ): UnionEncoder[A] =
+    pureUnion(enc.value.encode)
 }
 
 trait EncoderInstances0 extends EncoderConstructors {
   import Type._
 
   implicit def genericBasicEncoder[A](
-      implicit
-      typeable: Typeable[A],
+      implicit typeable: Typeable[A],
       low: LowPriority
   ): BasicEncoder[A] =
     pure(Ref(typeName[A]))
@@ -125,9 +133,9 @@ trait EncoderConstructors {
   def pure[A](tpe: Type): BasicEncoder[A] =
     new BasicEncoder[A] { def encode: Type = tpe }
 
-  def pureProd[A](tpe: Prod): ProdEncoder[A] =
-    new ProdEncoder[A] { def encode: Prod = tpe }
+  def pureStruct[A](tpe: Struct): StructEncoder[A] =
+    new StructEncoder[A] { def encode: Struct = tpe }
 
-  def pureSum[A](tpe: Sum): SumEncoder[A] =
-    new SumEncoder[A] { def encode: Sum = tpe }
+  def pureUnion[A](tpe: Union): UnionEncoder[A] =
+    new UnionEncoder[A] { def encode: Union = tpe }
 }

@@ -1,3 +1,5 @@
 package bridges.flow
 
-object Flow extends FlowRenderer
+import bridges.core.CoreBehaviour
+
+object Flow extends CoreBehaviour with FlowRenderer

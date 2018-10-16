@@ -1,3 +1,5 @@
 package bridges.elm
 
-object Elm extends ElmRenderer with ElmJsonDecoder with ElmJsonEncoder with ElmFileBuilder
+import bridges.core._
+
+object Elm extends CoreBehaviour with ElmRenderer with ElmJsonDecoder with ElmJsonEncoder with ElmFileBuilder

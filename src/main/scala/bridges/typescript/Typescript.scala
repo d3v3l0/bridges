@@ -1,3 +1,5 @@
 package bridges.typescript
 
-object Typescript extends TsRenderer
+import bridges.core.CoreBehaviour
+
+object Typescript extends CoreBehaviour with TypescriptRenderer
